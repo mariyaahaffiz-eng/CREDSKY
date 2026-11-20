@@ -1,6 +1,8 @@
 # SKY CRED — Requirement & Testing Checklist
 
 **Implementation:** complete  
+**Deployed:** https://credsky-murex.vercel.app (Vercel production)  
+**Repository:** https://github.com/mariyaahaffiz-eng/CREDSKY  
 **Test date:** 20 November 2026  
 **Live API:** WeatherAPI `/v1/current.json`  
 **Primary browsers tested:** Google Chrome 157 and Microsoft Edge 157 (Chromium)  

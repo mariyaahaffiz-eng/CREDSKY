@@ -4,7 +4,9 @@
 
 SKY CRED is a lightweight, single-page weather dashboard built with HTML, CSS and vanilla JavaScript. It fetches live current conditions from WeatherAPI, presents the data without weather jargon, and translates temperature, sky condition and wind into one clear recommendation.
 
-Live application: **https://credsky.vercel.app** _(update if the deployed URL differs)_
+Live application: **https://credsky-murex.vercel.app**
+
+Source: **https://github.com/mariyaahaffiz-eng/CREDSKY**
 
 ---
 
@@ -107,7 +109,13 @@ The repository is designed to deploy directly to Vercel:
 - **Output directory:** `dist`
 - **Required environment variable:** `WEATHER_API_KEY`
 
-`vercel.json` also sets a restrictive Content Security Policy, frame protection, MIME sniffing protection and a permissions policy.
+**Deploying updates:** `vercel --prod` from the project root. Connecting the GitHub
+repository for automatic deployments requires a Vercel account GitHub login
+connection, which is a dashboard step (`Settings → Git`), not something the
+build or this repository can configure.
+
+`vercel.json` also sets a restrictive Content Security Policy, frame protection,
+MIME sniffing protection and a permissions policy.
 
 ---
 
