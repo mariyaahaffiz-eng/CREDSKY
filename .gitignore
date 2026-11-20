@@ -1,0 +1,16 @@
+# Local secrets
+.env
+.env.local
+.env.*.local
+
+# Build output and tooling
+dist/
+node_modules/
+.vercel/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
