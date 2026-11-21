@@ -1,18 +1,21 @@
 import { WeatherError, fetchCurrentWeather } from "./api.js";
+import { getCountryByCode } from "./countries.js";
 import {
   derivePersonality,
   findPopularCity,
+  formatFullLocation,
   formatNumber,
 } from "./weather.js";
 import { ui } from "./ui.js";
 
 const DEFAULT_CITY = "Mumbai";
+const DEFAULT_COUNTRY = "IN";
 const MAX_CITY_LENGTH = 100;
 
 let activeController = null;
 let hasWeather = false;
-let lastSuccessfulCity = null;
-let lastFailedCity = null;
+let lastSuccessful = null;
+let lastRequest = null;
 
 function normalizeCity(rawCity) {
   return String(rawCity || "")
@@ -32,30 +35,26 @@ function asWeatherError(error) {
   return new WeatherError("GENERIC", { cause: error });
 }
 
-async function searchCity(rawCity, { isInitial = false } = {}) {
-  const city = normalizeCity(rawCity);
+function currentCountry() {
+  return ui.getCountry() || getCountryByCode(DEFAULT_COUNTRY);
+}
 
-  if (!city) {
-    ui.showValidation("Enter a city name to check its sky cred.");
-    return;
-  }
+function selectedChipCode() {
+  const country = currentCountry();
+  return lastSuccessful?.countryCode || country?.code || null;
+}
 
-  if (city.length > MAX_CITY_LENGTH) {
-    ui.showValidation("That city name is too long. Try a shorter search.");
-    return;
-  }
-
+async function performSearch(request, { isInitial = false } = {}) {
   ui.clearValidation();
   ui.hideBanner();
 
   const selectionBefore = ui.getSelectedCity();
-  const popularMatch = findPopularCity(city);
+  const popularMatch =
+    request.id || request.lat !== undefined
+      ? null
+      : findPopularCity(request.city, request.country);
 
-  if (popularMatch) {
-    ui.setSelectedCity(popularMatch);
-  } else {
-    ui.setSelectedCity(null);
-  }
+  ui.setSelectedCity(popularMatch?.city || null, popularMatch?.code || request.country);
 
   if (activeController) {
     activeController.abort();
@@ -63,28 +62,29 @@ async function searchCity(rawCity, { isInitial = false } = {}) {
 
   const controller = new AbortController();
   activeController = controller;
-  lastFailedCity = city;
+  lastRequest = request;
 
   ui.setSearching(true);
 
   try {
-    const result = await fetchCurrentWeather(city, { signal: controller.signal });
+    const result = await fetchCurrentWeather(request, { signal: controller.signal });
 
     if (controller.signal.aborted) {
       return;
     }
 
+    const { location } = result.data;
+
     hasWeather = true;
-    lastSuccessfulCity = result.data.location.name;
-    lastFailedCity = null;
+    lastSuccessful = { name: location.name, countryCode: request.country };
 
     const personality = derivePersonality(result.data.current);
     ui.renderWeather(result.data, personality);
     ui.setJson(result.data, result.raw);
-    ui.setSelectedCity(findPopularCity(result.data.location.name));
+    ui.setSelectedCity(location.name, request.country);
     ui.setSearching(false);
 
-    document.title = `${result.data.location.name} · ${formatNumber(
+    document.title = `${formatFullLocation(location)} · ${formatNumber(
       result.data.current.temp_c,
     )}°C · SKY CRED`;
   } catch (error) {
@@ -97,17 +97,16 @@ async function searchCity(rawCity, { isInitial = false } = {}) {
     }
 
     const weatherError = asWeatherError(error);
-    lastFailedCity = city;
     ui.setSearching(false);
 
     if (!hasWeather) {
       ui.showInitialError(weatherError);
-      ui.setSelectedCity(selectionBefore || (isInitial ? DEFAULT_CITY : null));
+      ui.setSelectedCity(selectionBefore || (isInitial ? DEFAULT_CITY : null), request.country);
     } else {
       ui.showBanner(weatherError, () => {
-        searchCity(city);
+        performSearch(request);
       });
-      ui.setSelectedCity(findPopularCity(lastSuccessfulCity));
+      ui.setSelectedCity(lastSuccessful?.name, selectedChipCode());
     }
   } finally {
     if (activeController === controller) {
@@ -116,24 +115,72 @@ async function searchCity(rawCity, { isInitial = false } = {}) {
   }
 }
 
+function searchCity(rawCity, { isInitial = false, suggestion = null } = {}) {
+  const city = normalizeCity(suggestion?.name || rawCity);
+
+  if (!city) {
+    ui.showValidation("Enter a city name to check its sky cred.");
+    return;
+  }
+
+  if (city.length > MAX_CITY_LENGTH) {
+    ui.showValidation("That city name is too long. Try a shorter search.");
+    return;
+  }
+
+  const country = currentCountry();
+  const request = { city, country: country.code };
+
+  if (suggestion) {
+    if (suggestion.id) {
+      request.id = suggestion.id;
+    } else if (suggestion.lat !== undefined && suggestion.lon !== undefined) {
+      request.lat = suggestion.lat;
+      request.lon = suggestion.lon;
+    }
+  }
+
+  performSearch(request, { isInitial });
+}
+
 function initialize() {
-  ui.bindSearch((value) => searchCity(value));
-  ui.bindPopularCities((city) => {
+  ui.bindSearch((value, suggestion) => {
+    searchCity(value, { suggestion });
+  });
+
+  ui.bindSuggestionSelect((suggestion) => {
+    ui.setSearchValue(suggestion.name);
+    searchCity(suggestion.name, { suggestion });
+  });
+
+  ui.bindPopularCities((city, countryCode) => {
+    if (countryCode) {
+      ui.setCountryByCode(countryCode);
+    }
     ui.setSearchValue(city);
     ui.clearValidation();
     searchCity(city);
   });
+
   ui.bindInitialRetry(() => {
-    searchCity(lastFailedCity || DEFAULT_CITY);
+    const request = lastRequest || {
+      city: DEFAULT_CITY,
+      country: currentCountry().code || DEFAULT_COUNTRY,
+    };
+    ui.showInitialLoading();
+    performSearch(request, { isInitial: true });
   });
+
   ui.bindBannerRetry();
   ui.bindErrorDismiss();
   ui.bindJsonViewer();
 
+  const country = currentCountry();
+
   ui.setSearchValue(DEFAULT_CITY);
-  ui.setSelectedCity(DEFAULT_CITY);
+  ui.setSelectedCity(DEFAULT_CITY, country.code);
   ui.showInitialLoading();
-  searchCity(DEFAULT_CITY, { isInitial: true });
+  performSearch({ city: DEFAULT_CITY, country: country.code }, { isInitial: true });
 }
 
 initialize();

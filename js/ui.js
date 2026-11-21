@@ -1,26 +1,42 @@
+import { fetchCitySuggestions } from "./api.js";
+import {
+  filterCountries,
+  findCountry,
+  getCountryByCode,
+} from "./countries.js";
 import {
   buildFactorTags,
   deriveSkyTheme,
   formatBytes,
   formatClockForZone,
+  formatFullLocation,
   formatNumber,
   formatRegion,
   formatTime,
   getHumidityNote,
+  getPopularCityLabel,
   getUvLevel,
   getWeatherIconUrl,
   getWindNote,
   normalizeCityName,
+  POPULAR_CITIES,
 } from "./weather.js";
 
 const elements = {
   body: document.body,
   searchForm: document.querySelector("#search-form"),
+  searchField: document.querySelector(".search-field"),
   searchInput: document.querySelector("#city-input"),
   searchButton: document.querySelector("#search-button"),
   searchButtonLabel: document.querySelector(".search-button__label"),
   searchHint: document.querySelector("#search-hint"),
+  countryPicker: document.querySelector("#country-picker"),
+  countryInput: document.querySelector("#country-input"),
+  countryListbox: document.querySelector("#country-listbox"),
+  citySuggestions: document.querySelector("#city-suggestions"),
   popularCities: document.querySelector("#popular-cities"),
+  resolvedLocation: document.querySelector("#resolved-location"),
+  resolvedLocationText: document.querySelector("#resolved-location-text"),
   weatherPanel: document.querySelector("#weather-panel"),
   initialLoading: document.querySelector("#initial-loading"),
   initialError: document.querySelector("#initial-error"),
@@ -31,6 +47,7 @@ const elements = {
   updatingOverlay: document.querySelector("#updating-overlay"),
   cityName: document.querySelector("#city-name"),
   cityRegion: document.querySelector("#city-region"),
+  location: document.querySelector(".location"),
   localTime: document.querySelector("#local-time"),
   timezone: document.querySelector("#timezone"),
   tempValue: document.querySelector("#temp-value"),
@@ -85,6 +102,20 @@ const state = {
   toastTimer: null,
   copyTimer: null,
   hasWeather: false,
+  country: getCountryByCode("IN"),
+  countryOpen: false,
+  countryOptions: [],
+  countryActiveIndex: -1,
+  suggestions: [],
+  suggestionActiveIndex: -1,
+  selectedSuggestion: null,
+  suggestionAbort: null,
+  suggestionTimer: null,
+  suggestionToken: 0,
+  suggestionBlurTimer: null,
+  countryBlurTimer: null,
+  onSuggestionSelect: null,
+  onCountryChange: null,
 };
 
 function setElementText(element, value) {
@@ -219,17 +250,405 @@ async function handleCopy() {
   }
 }
 
+function formatSuggestionLabel(suggestion) {
+  return [suggestion.name, suggestion.region, suggestion.country]
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(", ");
+}
+
+function renderPopularCities() {
+  elements.popularCities.replaceChildren();
+
+  for (const entry of POPULAR_CITIES) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "city-chip";
+    chip.dataset.city = entry.city;
+    chip.dataset.countryCode = entry.code;
+    chip.textContent = getPopularCityLabel(entry);
+    chip.setAttribute("aria-pressed", "false");
+    elements.popularCities.append(chip);
+  }
+}
+
+/* ---------- Country combobox ---------- */
+
+function setCountryActive(index) {
+  const options = [...elements.countryListbox.querySelectorAll(".country-option")];
+
+  if (!options.length) {
+    state.countryActiveIndex = -1;
+    elements.countryInput.removeAttribute("aria-activedescendant");
+    return;
+  }
+
+  state.countryActiveIndex = (index + options.length) % options.length;
+
+  options.forEach((option, optionIndex) => {
+    const active = optionIndex === state.countryActiveIndex;
+    option.classList.toggle("is-active", active);
+    if (active) {
+      elements.countryInput.setAttribute("aria-activedescendant", option.id);
+      option.scrollIntoView({ block: "nearest" });
+    }
+  });
+}
+
+function renderCountryOptions(query) {
+  const matches = filterCountries(query);
+  state.countryOptions = matches;
+  state.countryActiveIndex = -1;
+  elements.countryInput.removeAttribute("aria-activedescendant");
+  elements.countryListbox.replaceChildren();
+  elements.countryListbox.scrollTop = 0;
+
+  if (!matches.length) {
+    const empty = document.createElement("li");
+    empty.className = "country-empty";
+    empty.setAttribute("role", "option");
+    empty.setAttribute("aria-disabled", "true");
+    empty.textContent = "No countries found";
+    elements.countryListbox.append(empty);
+    return;
+  }
+
+  for (const country of matches) {
+    const option = document.createElement("li");
+    option.className = "country-option";
+    option.id = `country-option-${country.code}`;
+    option.dataset.code = country.code;
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", String(country.code === state.country?.code));
+
+    const name = document.createElement("span");
+    name.textContent = country.name;
+
+    const code = document.createElement("span");
+    code.className = "country-option__code";
+    code.textContent = country.code;
+
+    option.append(name, code);
+    elements.countryListbox.append(option);
+  }
+
+  if (!query) {
+    const selectedIndex = matches.findIndex((country) => country.code === state.country?.code);
+    if (selectedIndex >= 0) setCountryActive(selectedIndex);
+  }
+}
+
+function openCountryList(query) {
+  state.countryOpen = true;
+  elements.countryPicker.classList.add("is-open");
+  elements.countryListbox.hidden = false;
+  elements.countryInput.setAttribute("aria-expanded", "true");
+  renderCountryOptions(query);
+}
+
+function closeCountryList() {
+  state.countryOpen = false;
+  state.countryOptions = [];
+  state.countryActiveIndex = -1;
+  elements.countryPicker.classList.remove("is-open");
+  elements.countryListbox.hidden = true;
+  elements.countryInput.setAttribute("aria-expanded", "false");
+  elements.countryInput.removeAttribute("aria-activedescendant");
+}
+
+/** Updates selector state without firing the app-level change callback. */
+function applyCountry(country) {
+  state.country = country;
+  elements.countryInput.value = country.name;
+  closeCountryList();
+
+  state.selectedSuggestion = null;
+  cancelSuggestions();
+
+  elements.popularCities.querySelectorAll(".city-chip").forEach((chip) => {
+    if (chip.dataset.countryCode !== country.code) {
+      chip.setAttribute("aria-pressed", "false");
+    }
+  });
+}
+
+function selectCountry(country) {
+  applyCountry(country);
+  if (typeof state.onCountryChange === "function") {
+    state.onCountryChange(country);
+  }
+}
+
+/* ---------- City autocomplete ---------- */
+
+function closeSuggestions() {
+  state.suggestions = [];
+  state.suggestionActiveIndex = -1;
+  elements.citySuggestions.hidden = true;
+  elements.citySuggestions.replaceChildren();
+  elements.searchInput.setAttribute("aria-expanded", "false");
+  elements.searchInput.removeAttribute("aria-activedescendant");
+}
+
+function cancelSuggestions({ clearSelection = true } = {}) {
+  window.clearTimeout(state.suggestionTimer);
+  state.suggestionTimer = null;
+
+  if (state.suggestionAbort) {
+    state.suggestionAbort.abort();
+    state.suggestionAbort = null;
+  }
+
+  state.suggestionToken += 1;
+  closeSuggestions();
+
+  if (clearSelection) {
+    state.selectedSuggestion = null;
+  }
+}
+
+function setSuggestionActive(index) {
+  const options = [...elements.citySuggestions.querySelectorAll(".suggestion")];
+
+  if (!options.length) {
+    state.suggestionActiveIndex = -1;
+    elements.searchInput.removeAttribute("aria-activedescendant");
+    return;
+  }
+
+  state.suggestionActiveIndex = (index + options.length) % options.length;
+
+  options.forEach((option, optionIndex) => {
+    const active = optionIndex === state.suggestionActiveIndex;
+    option.classList.toggle("is-active", active);
+    option.setAttribute("aria-selected", String(active));
+    if (active) {
+      elements.searchInput.setAttribute("aria-activedescendant", option.id);
+      option.scrollIntoView({ block: "nearest" });
+    }
+  });
+}
+
+function renderSuggestions(suggestions) {
+  state.suggestions = suggestions;
+  state.suggestionActiveIndex = -1;
+  elements.citySuggestions.replaceChildren();
+  elements.citySuggestions.scrollTop = 0;
+  elements.searchInput.removeAttribute("aria-activedescendant");
+
+  if (!suggestions.length) {
+    closeSuggestions();
+    return;
+  }
+
+  suggestions.forEach((suggestion, index) => {
+    const option = document.createElement("div");
+    option.className = "suggestion";
+    option.id = `city-option-${suggestion.id}`;
+    option.dataset.index = String(index);
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", "false");
+    option.textContent = formatSuggestionLabel(suggestion);
+    elements.citySuggestions.append(option);
+  });
+
+  elements.citySuggestions.hidden = false;
+  elements.searchInput.setAttribute("aria-expanded", "true");
+}
+
+function scheduleSuggestions() {
+  const query = elements.searchInput.value.trim();
+  cancelSuggestions();
+
+  if (query.length < 2) return;
+
+  state.suggestionTimer = window.setTimeout(async () => {
+    const country = state.country;
+    if (!country) return;
+
+    const controller = new AbortController();
+    state.suggestionAbort = controller;
+    const token = state.suggestionToken;
+
+    try {
+      const suggestions = await fetchCitySuggestions({
+        query,
+        country: country.code,
+        signal: controller.signal,
+      });
+
+      if (token !== state.suggestionToken) return;
+      if (elements.searchInput.value.trim() !== query) return;
+      if (country.code !== state.country?.code) return;
+
+      renderSuggestions(suggestions);
+    } catch (error) {
+      if (token === state.suggestionToken && error?.name !== "AbortError") {
+        closeSuggestions();
+        elements.searchHint.dataset.kind = "info";
+        setElementText(
+          elements.searchHint,
+          "City suggestions are unavailable. Press Enter to search by name.",
+        );
+      }
+    } finally {
+      if (state.suggestionAbort === controller) {
+        state.suggestionAbort = null;
+      }
+    }
+  }, 280);
+}
+
+function chooseSuggestion(suggestion) {
+  window.clearTimeout(state.suggestionTimer);
+  cancelSuggestions({ clearSelection: false });
+  state.selectedSuggestion = suggestion;
+  elements.searchInput.value = suggestion.name;
+  elements.searchInput.focus();
+
+  if (typeof state.onSuggestionSelect === "function") {
+    state.onSuggestionSelect(suggestion);
+  }
+}
+
+function bindCountryEvents() {
+  elements.countryInput.addEventListener("focus", () => {
+    elements.countryInput.select();
+    openCountryList("");
+  });
+
+  elements.countryInput.addEventListener("input", () => {
+    openCountryList(elements.countryInput.value);
+  });
+
+  elements.countryInput.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (!state.countryOpen) openCountryList(elements.countryInput.value);
+      setCountryActive(state.countryActiveIndex + 1);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!state.countryOpen) openCountryList(elements.countryInput.value);
+      setCountryActive(state.countryActiveIndex - 1);
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const country = state.countryOptions[state.countryActiveIndex];
+      if (country) {
+        selectCountry(country);
+        return;
+      }
+      const match = findCountry(elements.countryInput.value);
+      if (match) selectCountry(match);
+      else {
+        closeCountryList();
+        elements.countryInput.value = state.country?.name || "India";
+      }
+      return;
+    }
+
+    if (event.key === "Escape") {
+      closeCountryList();
+      elements.countryInput.value = state.country?.name || "India";
+    }
+  });
+
+  elements.countryInput.addEventListener("blur", () => {
+    window.clearTimeout(state.countryBlurTimer);
+    state.countryBlurTimer = window.setTimeout(() => {
+      closeCountryList();
+      const match = findCountry(elements.countryInput.value);
+      if (match && match.code !== state.country?.code) selectCountry(match);
+      else elements.countryInput.value = state.country?.name || "India";
+    }, 130);
+  });
+
+  elements.countryListbox.addEventListener("pointerdown", (event) => {
+    const option = event.target.closest(".country-option");
+    if (!option) return;
+    event.preventDefault();
+    const country = getCountryByCode(option.dataset.code);
+    if (country) selectCountry(country);
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (!state.countryOpen) return;
+    if (elements.countryPicker.contains(event.target)) return;
+    closeCountryList();
+    elements.countryInput.value = state.country?.name || "India";
+  });
+}
+
+function bindSuggestionEvents() {
+  elements.searchInput.addEventListener("input", () => {
+    setElementText(elements.searchHint, "");
+    delete elements.searchHint.dataset.kind;
+    elements.searchInput.removeAttribute("aria-invalid");
+    scheduleSuggestions();
+  });
+
+  elements.searchInput.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (state.suggestions.length) setSuggestionActive(state.suggestionActiveIndex + 1);
+      else scheduleSuggestions();
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (state.suggestions.length) setSuggestionActive(state.suggestionActiveIndex - 1);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      cancelSuggestions({ clearSelection: false });
+      return;
+    }
+
+    if (event.key === "Enter" && state.suggestionActiveIndex >= 0) {
+      const suggestion = state.suggestions[state.suggestionActiveIndex];
+      if (suggestion) {
+        event.preventDefault();
+        chooseSuggestion(suggestion);
+      }
+    }
+  });
+
+  elements.searchInput.addEventListener("blur", () => {
+    window.clearTimeout(state.suggestionBlurTimer);
+    state.suggestionBlurTimer = window.setTimeout(() => closeSuggestions(), 130);
+  });
+
+  elements.citySuggestions.addEventListener("pointerdown", (event) => {
+    const option = event.target.closest(".suggestion");
+    if (!option) return;
+    event.preventDefault();
+    const suggestion = state.suggestions[Number(option.dataset.index)];
+    if (suggestion) chooseSuggestion(suggestion);
+  });
+}
+
+renderPopularCities();
+bindCountryEvents();
+bindSuggestionEvents();
+elements.countryInput.value = state.country.name;
+
 export const ui = {
   elements,
 
   bindSearch(handler) {
     elements.searchForm.addEventListener("submit", (event) => {
       event.preventDefault();
-      handler(elements.searchInput.value);
-    });
-
-    elements.searchInput.addEventListener("input", () => {
-      this.clearValidation();
+      const suggestion = state.selectedSuggestion;
+      state.selectedSuggestion = null;
+      closeSuggestions();
+      handler(elements.searchInput.value, suggestion);
     });
   },
 
@@ -237,8 +656,16 @@ export const ui = {
     elements.popularCities.addEventListener("click", (event) => {
       const chip = event.target.closest(".city-chip");
       if (!chip) return;
-      handler(chip.dataset.city);
+      handler(chip.dataset.city, chip.dataset.countryCode);
     });
+  },
+
+  bindCountryChange(handler) {
+    state.onCountryChange = typeof handler === "function" ? handler : null;
+  },
+
+  bindSuggestionSelect(handler) {
+    state.onSuggestionSelect = typeof handler === "function" ? handler : null;
   },
 
   bindInitialRetry(handler) {
@@ -301,22 +728,25 @@ export const ui = {
 
   showValidation(message) {
     setElementText(elements.searchHint, message);
+    delete elements.searchHint.dataset.kind;
     elements.searchInput.setAttribute("aria-invalid", "true");
     elements.searchInput.focus();
   },
 
   clearValidation() {
     setElementText(elements.searchHint, "");
+    delete elements.searchHint.dataset.kind;
     elements.searchInput.removeAttribute("aria-invalid");
   },
 
-  setSelectedCity(cityName) {
+  setSelectedCity(cityName, countryCode = null) {
     const key = cityName ? normalizeCityName(cityName) : "";
+    const code = countryCode ? String(countryCode).toUpperCase() : null;
+
     elements.popularCities.querySelectorAll(".city-chip").forEach((chip) => {
-      chip.setAttribute(
-        "aria-pressed",
-        String(Boolean(key) && normalizeCityName(chip.dataset.city) === key),
-      );
+      const matchesCity = Boolean(key) && normalizeCityName(chip.dataset.city) === key;
+      const matchesCountry = !code || chip.dataset.countryCode === code;
+      chip.setAttribute("aria-pressed", String(matchesCity && matchesCountry));
     });
   },
 
@@ -325,6 +755,23 @@ export const ui = {
       '.city-chip[aria-pressed="true"]',
     );
     return activeChip?.dataset.city || null;
+  },
+
+  getCountry() {
+    return state.country;
+  },
+
+  setCountryByCode(code) {
+    const country = getCountryByCode(code);
+    if (country && country.code !== state.country?.code) {
+      applyCountry(country);
+    }
+  },
+
+  setResolvedLocation(location) {
+    const full = formatFullLocation(location);
+    setElementText(elements.resolvedLocationText, full || "—");
+    elements.resolvedLocation.hidden = !full;
   },
 
   setSearching(isLoading) {
@@ -375,6 +822,8 @@ export const ui = {
     setElementText(elements.cityName, location.name);
     setElementText(elements.cityRegion, formatRegion(location) || location.country || "—");
     setElementText(elements.timezone, location.tz_id || "Local timezone");
+    setElementText(elements.resolvedLocationText, formatFullLocation(location) || "—");
+    elements.resolvedLocation.hidden = !formatFullLocation(location);
     startClock(location.tz_id);
 
     setElementText(elements.tempValue, formatNumber(current.temp_c));

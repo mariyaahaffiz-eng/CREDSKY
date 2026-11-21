@@ -3,13 +3,13 @@
 **Implementation:** complete  
 **Deployed:** https://credsky-murex.vercel.app (Vercel production)  
 **Repository:** https://github.com/mariyaahaffiz-eng/CREDSKY  
-**Test date:** 20 November 2026  
-**Live API:** WeatherAPI `/v1/current.json`  
+**Test date:** 21 November 2026  
+**Live API:** WeatherAPI `/v1/current.json` + `/v1/search.json` via serverless proxies  
 **Primary browsers tested:** Google Chrome 157 and Microsoft Edge 157 (Chromium)  
 **Viewports tested:** 1440 px desktop, 768 px tablet, 390 px mobile  
-**Automated checks:** 19/19 passed (`npm test`)  
+**Automated checks:** 24/24 passed (`npm test`)  
 **Lighthouse:** Accessibility 100 · Best Practices 100 · SEO 100  
-**End-to-end report:** all tested flows passed
+**End-to-end report:** all tested flows passed, including Delhi (India/Canada), Paris (France/USA) and Springfield (USA)
 
 Legend:
 
@@ -37,25 +37,40 @@ Acceptance: initial request automatic; input Mumbai; data populated from API; no
 
 | ID | Status | Evidence |
 | --- | --- | --- |
-| FR-02.1 Search input | Pass | Free-text city input. |
-| FR-02.2 Search action | Pass | Button search verified with Delhi and London. |
-| FR-02.3 Keyboard support | Pass | Enter key submitted the form and loaded Delhi. |
-| FR-02.4 Empty validation | Pass | Whitespace-only search showed a validation message and made no API request. |
-| FR-02.5 API request | Pass | Each valid search produced a new WeatherAPI request. |
+| FR-02.1 Search input | Pass | Free-text city input plus a searchable country selector defaulting to India. |
+| FR-02.2 Search action | Pass | Button and Enter searches verified with Delhi (India), Paris (France) and Springfield (USA). |
+| FR-02.3 Keyboard support | Pass | Enter submits; Arrow keys move through city/country options; Escape closes lists. |
+| FR-02.4 Empty validation | Pass | Whitespace-only search showed a validation message and made no weather request. |
+| FR-02.5 API request | Pass | Each valid search produced a same-origin `/api/weather` request. |
 | FR-02.6 Result update | Pass | All weather and JSON fields updated after each response. |
 | FR-02.7 Search failure | Pass | `zzzznotacity` showed “City not found”. |
+| FR-02.8 Autocomplete | Pass | Typing “Delhi” with India selected showed “Delhi, Delhi, India” only; with Canada selected it showed “Delhi, Ontario, Canada” only. |
+| FR-02.9 Suggestion lookup | Pass | Selecting a suggestion requested `/api/weather?id=…`; Delhi India used `id=1112321`, Delhi Canada `id=313868`. |
+| FR-02.10 Country verification | Pass | Delhi with United States selected returned “No match found in United States” and kept the previous card. |
+| FR-02.11 Full location | Pass | Card shows city, region and country (e.g. “Paris, Ile-de-France, France”); the line under the search repeats the full resolved location. |
 
-Acceptance: Delhi/London fetched; input retained search; London card stayed visible during failed search; multiple searches occurred without a refresh.
+Acceptance: country-filtered Delhi and Paris searches fetched; input retained search; the previous card stayed visible during a failed or mismatched search; multiple searches occurred without a refresh.
+
+### FR-02A — Country resolution matrix
+
+| Requested city | Selected country | Resolved location | Status |
+| --- | --- | --- | --- |
+| Delhi | India | Delhi, Delhi, India | Pass |
+| Delhi | Canada | Delhi, Ontario, Canada | Pass |
+| Paris | France | Paris, Ile-de-France, France | Pass |
+| Paris | United States | Paris, Texas, United States of America | Pass |
+| Springfield | United States | Springfield, Massachusetts, United States of America | Pass |
 
 ### FR-03 — Popular cities
 
 | ID | Status | Evidence |
 | --- | --- | --- |
-| FR-03.1 City shortcuts | Pass | All ten required cities are rendered as chips. |
-| FR-03.2 City selection | Pass | Bengaluru and London chip clicks fetched live weather. |
-| FR-03.3 Search synchronization | Pass | Input updated to the clicked city. |
+| FR-03.1 City shortcuts | Pass | All ten required cities are rendered as chips with country labels (e.g. “Delhi, India”, “New York, USA”, “London, UK”). |
+| FR-03.2 City selection | Pass | Bengaluru, London and New York chip clicks fetched live weather. |
+| FR-03.3 Search synchronization | Pass | Input updated to the clicked city and the selector to the chip's country. |
 | FR-03.4 Selection indicator | Pass | Only the active chip has `aria-pressed="true"` and the accent style. |
 | FR-03.5 Weather update | Pass | Card, metrics, local time, icon and JSON all changed together. |
+| FR-03.6 Country-aware chips | Pass | Clicking “London, UK” switched the selector to United Kingdom and requested `country=GB`; “New York, USA” requested `country=US`. |
 
 Acceptance: Bengaluru fetched; selected city highlighted; Mumbai lost highlight; all weather components reflected Bengaluru.
 
@@ -116,6 +131,7 @@ The UI displays: “App-generated interpretation · Not a real credit score.”
 | --- | --- | --- |
 | Empty input | Pass | Validation message; no request. |
 | Invalid city | Pass | “City not found”; previous card retained. |
+| Country mismatch | Pass | “No match found in United States”; previous card retained. |
 | Invalid API key | Pass (mapping test) | “API configuration error”; previous card retained. |
 | API rate limit | Pass (mapping test) | “Temporary service error”; retry offered. |
 | Internet unavailable | Pass | “No network connection”; previous card retained. |
@@ -138,8 +154,8 @@ Additional requirements verified:
 | --- | --- | --- |
 | Desktop 1440 px | Pass | Centered, 1240 px max content; weather + JSON side-by-side. |
 | Tablet 768 px | Pass | Hero stacks; weather card full width; JSON/method two-column. |
-| Mobile 390 px | Pass | Search compresses to icon button; metrics stack; JSON below card. |
-| No horizontal overflow | Pass | `scrollWidth === innerWidth` at 390, 768 and 1440, including the error banner state. |
+| Mobile 390 px | Pass | Search compresses to icon button; country selector moves to its own row; metrics stack; JSON below card. |
+| No horizontal overflow | Pass | `scrollWidth === innerWidth` at 390, 768 and 1440, including the error banner, open country list and open city suggestions. |
 
 ---
 
@@ -149,15 +165,27 @@ Additional requirements verified:
 | --- | --- |
 | WeatherAPI.com | Pass |
 | `/v1/current.json` | Pass |
+| `/v1/search.json` | Pass |
 | GET | Pass |
-| `key` + `q` query parameters | Pass |
-| Default query Mumbai | Pass |
+| `key` + `q` query parameters | Pass (added server-side only) |
+| Default query Mumbai, India | Pass |
 | JSON response parsing | Pass |
 | Dynamic UI population | Pass |
 | Fresh request per city | Pass |
 | Error/network handling | Pass |
 | API key stored in `.env` / Vercel env | Pass |
+| Key absent from browser bundle and requests | Pass |
 | No hardcoded/mock weather | Pass |
+
+### FR-11 — Typography
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| FR-11.1 Body/UI font | Pass | Inter loaded from Google Fonts with `display=swap`; computed body weight 400. |
+| FR-11.2 Weight scale | Pass | Body 400, labels/buttons 500–600, headings 700. |
+| FR-11.3 Developer monospace | Pass | JetBrains Mono applies only to the developer JSON/API panel. |
+| FR-11.4 No layout shift | Pass | Metric-matched local fallback (`Inter Fallback`) and `font-display: swap`; layout measured after fonts loaded. |
+| FR-11.5 Theme preserved | Pass | Colors, spacing and layout unchanged; only typefaces and type weights changed. |
 
 ---
 
@@ -167,8 +195,8 @@ Additional requirements verified:
 | --- | --- | --- |
 | Performance | Partial verification | Lightweight static app; loading feedback appears immediately. No formal performance benchmark was run. |
 | API performance | Pass | Loading state appears before the response resolves. |
-| Reliability | Pass | Error scenarios, retries, timeout and stale-request protection tested. |
-| Security | Pass | Key is correctly treated as public frontend configuration; `.env` gitignored; CSP and security headers configured; Lighthouse Best Practices 100. |
+| Reliability | Pass | Error scenarios, retries, timeout, stale-request protection and country verification tested. |
+| Security | Pass | WeatherAPI key is server-side only; the browser makes no `api.weatherapi.com` requests. CSP uses `connect-src 'self'`; Lighthouse Best Practices 100. |
 | Maintainability | Pass | HTML, CSS and JS separated into focused ES modules. |
 | Compatibility | Gap | Verified in Chrome 157 and Edge 157. Safari and Firefox were not available for runtime testing; only standards-based features are used. |
 | Accessibility | Pass | Lighthouse Accessibility 100; keyboard Enter search and JSON tab navigation verified; accessible labels, live regions, focus states and reduced-motion styles present. |
@@ -187,6 +215,8 @@ Additional requirements verified:
 6. No page refresh required — **Pass**
 7. API failures handled gracefully — **Pass**
 8. Works on desktop and mobile — **Pass**
+9. Ambiguous city names resolve to the selected country — **Pass**
+10. Typography matches the Inter / JetBrains Mono requirement — **Pass**
 
 ---
 

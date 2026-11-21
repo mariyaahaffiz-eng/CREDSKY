@@ -20,7 +20,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400;1,700&family=JetBrains+Mono:wght@400;500;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./css/styles.css" />
@@ -110,6 +110,7 @@
                 id="city-input"
                 name="city"
                 type="search"
+                role="combobox"
                 value="Mumbai"
                 placeholder="Search any city…"
                 autocomplete="off"
@@ -118,12 +119,66 @@
                 maxlength="100"
                 enterkeyhint="search"
                 aria-describedby="search-hint"
+                aria-autocomplete="list"
+                aria-expanded="false"
+                aria-controls="city-suggestions"
               />
+
+              <div class="country-picker" id="country-picker">
+                <span class="country-picker__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="8.2" stroke="currentColor" stroke-width="1.6" />
+                    <path
+                      d="M4 12h16M12 3.8c2.1 2.2 3.2 5 3.2 8.2S14.1 18 12 20.2C9.9 18 8.8 15.2 8.8 12S9.9 6 12 3.8Z"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                    />
+                  </svg>
+                </span>
+                <label class="sr-only" for="country-input">Country</label>
+                <input
+                  id="country-input"
+                  name="country"
+                  type="text"
+                  role="combobox"
+                  value="India"
+                  autocomplete="off"
+                  autocapitalize="words"
+                  spellcheck="false"
+                  maxlength="60"
+                  aria-autocomplete="list"
+                  aria-expanded="false"
+                  aria-controls="country-listbox"
+                />
+                <svg
+                  class="country-picker__chevron"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="m4 6.5 4 4 4-4"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+                <ul
+                  class="country-picker__list"
+                  id="country-listbox"
+                  role="listbox"
+                  aria-label="Countries"
+                  tabindex="-1"
+                  hidden
+                ></ul>
+              </div>
+
               <button
                 class="search-button"
                 id="search-button"
                 type="submit"
-                aria-label="Check sky for this city"
+                aria-label="Check sky for this city and country"
               >
                 <span class="search-button__label">Check sky</span>
                 <svg
@@ -142,6 +197,15 @@
                 </svg>
                 <span class="spinner search-button__spinner" aria-hidden="true"></span>
               </button>
+
+              <div
+                class="suggestions"
+                id="city-suggestions"
+                role="listbox"
+                aria-label="City suggestions"
+                tabindex="-1"
+                hidden
+              ></div>
             </div>
             <p class="search-hint" id="search-hint" aria-live="polite"></p>
           </form>
@@ -192,39 +256,13 @@
               id="popular-cities"
               role="group"
               aria-labelledby="popular-label"
-            >
-              <button type="button" class="city-chip" data-city="Mumbai" aria-pressed="true">
-                Mumbai
-              </button>
-              <button type="button" class="city-chip" data-city="Delhi" aria-pressed="false">
-                Delhi
-              </button>
-              <button type="button" class="city-chip" data-city="Bengaluru" aria-pressed="false">
-                Bengaluru
-              </button>
-              <button type="button" class="city-chip" data-city="Hyderabad" aria-pressed="false">
-                Hyderabad
-              </button>
-              <button type="button" class="city-chip" data-city="Chennai" aria-pressed="false">
-                Chennai
-              </button>
-              <button type="button" class="city-chip" data-city="Kolkata" aria-pressed="false">
-                Kolkata
-              </button>
-              <button type="button" class="city-chip" data-city="Pune" aria-pressed="false">
-                Pune
-              </button>
-              <button type="button" class="city-chip" data-city="Ahmedabad" aria-pressed="false">
-                Ahmedabad
-              </button>
-              <button type="button" class="city-chip" data-city="New York" aria-pressed="false">
-                New York
-              </button>
-              <button type="button" class="city-chip" data-city="London" aria-pressed="false">
-                London
-              </button>
-            </div>
+            ></div>
           </div>
+
+          <p class="resolved-location" id="resolved-location" hidden>
+            <span class="resolved-location__label">Showing</span>
+            <span id="resolved-location-text">—</span>
+          </p>
         </div>
       </section>
 

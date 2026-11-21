@@ -1,13 +1,16 @@
-import { CONFIG } from "./config.js";
-
-const API_ENDPOINT = "https://api.weatherapi.com/v1/current.json";
-const REQUEST_TIMEOUT_MS = 15000;
+const API_BASE = "/api";
+const REQUEST_TIMEOUT_MS = 20000;
+const SUGGEST_TIMEOUT_MS = 20000;
 
 /** User-facing copy for every handled failure mode. */
 export const ERROR_COPY = Object.freeze({
   CITY_NOT_FOUND: {
     title: "City not found",
-    message: "We couldn't find that city. Check the spelling or try a nearby major city.",
+    message: "We couldn't find that city. Check the spelling or pick a suggestion.",
+  },
+  COUNTRY_MISMATCH: {
+    title: "No match found",
+    message: "We couldn't find that city in the selected country.",
   },
   CONFIG: {
     title: "API configuration error",
@@ -40,13 +43,13 @@ export const ERROR_COPY = Object.freeze({
 });
 
 export class WeatherError extends Error {
-  constructor(code, { cause, retryable = true } = {}) {
+  constructor(code, { cause, retryable = true, title, message } = {}) {
     const copy = ERROR_COPY[code] || ERROR_COPY.GENERIC;
-    super(copy.message, { cause });
+    super(message || copy.message, { cause });
     this.name = "WeatherError";
     this.code = ERROR_COPY[code] ? code : "GENERIC";
-    this.title = copy.title;
-    this.userMessage = copy.message;
+    this.title = title || copy.title;
+    this.userMessage = message || copy.message;
     this.retryable = retryable;
   }
 }
@@ -79,10 +82,22 @@ export function classifyApiFailure(status, rawApiCode) {
   return "UNEXPECTED";
 }
 
-function toWeatherError(payload, response) {
-  return new WeatherError(
-    classifyApiFailure(response?.status, payload?.error?.code),
-  );
+function errorFromResponse(status, payload) {
+  const code = payload?.error?.code;
+
+  if (code === "COUNTRY_MISMATCH") {
+    const country = payload?.error?.country || "that country";
+    return new WeatherError("COUNTRY_MISMATCH", {
+      title: `No match found in ${country}`,
+      message: `We couldn't find a city by that name in ${country}. Check the spelling or pick a suggestion.`,
+    });
+  }
+
+  if (typeof code === "string" && ERROR_COPY[code]) {
+    return new WeatherError(code);
+  }
+
+  return new WeatherError(classifyApiFailure(status, payload?.error?.apiCode));
 }
 
 function isFiniteNumber(value) {
@@ -97,6 +112,8 @@ function validateResponse(payload) {
   const hasLocation =
     typeof location?.name === "string" &&
     location.name.trim().length > 0 &&
+    typeof location?.country === "string" &&
+    location.country.length > 0 &&
     typeof location?.tz_id === "string" &&
     location.tz_id.length > 0 &&
     isFiniteNumber(location?.localtime_epoch);
@@ -121,18 +138,19 @@ function validateResponse(payload) {
   return Boolean(hasLocation && hasCurrent);
 }
 
+function offline() {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
 /**
- * Fetches current weather data while preserving the exact response text for
- * the raw JSON viewer.
+ * Fetches current weather through the serverless proxy. A request is either a
+ * unique WeatherAPI location id, exact coordinates, or "city + country".
  */
-export async function fetchCurrentWeather(city, { signal } = {}) {
-  const key = CONFIG.WEATHER_API_KEY?.trim();
-
-  if (!key || key.includes("your_weatherapi")) {
-    throw new WeatherError("CONFIG");
-  }
-
-  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+export async function fetchCurrentWeather(
+  { city, country, id, lat, lon },
+  { signal } = {},
+) {
+  if (offline()) {
     throw new WeatherError("NETWORK");
   }
 
@@ -148,9 +166,15 @@ export async function fetchCurrentWeather(city, { signal } = {}) {
   signal?.addEventListener("abort", abortFromCaller, { once: true });
 
   try {
-    const url = new URL(API_ENDPOINT);
-    url.searchParams.set("key", key);
-    url.searchParams.set("q", city);
+    const url = new URL(`${API_BASE}/weather`, window.location.origin);
+    if (id) url.searchParams.set("id", id);
+    else if (lat !== undefined && lon !== undefined) {
+      url.searchParams.set("lat", lat);
+      url.searchParams.set("lon", lon);
+    } else {
+      url.searchParams.set("city", city);
+    }
+    url.searchParams.set("country", country);
 
     const response = await fetch(url, {
       method: "GET",
@@ -160,28 +184,31 @@ export async function fetchCurrentWeather(city, { signal } = {}) {
       referrerPolicy: "no-referrer",
     });
 
-    const raw = await response.text();
+    const text = await response.text();
     let payload = null;
 
     try {
-      payload = raw ? JSON.parse(raw) : null;
+      payload = text ? JSON.parse(text) : null;
     } catch {
       if (!response.ok) {
-        throw toWeatherError(null, response);
+        throw errorFromResponse(response.status, null);
       }
       throw new WeatherError("UNEXPECTED");
     }
 
     if (!response.ok || payload?.error) {
-      throw toWeatherError(payload, response);
+      throw errorFromResponse(response.status, payload);
     }
 
-    if (!validateResponse(payload)) {
+    const data = payload?.data;
+    const raw = typeof payload?.raw === "string" ? payload.raw : text;
+
+    if (!validateResponse(data)) {
       throw new WeatherError("UNEXPECTED");
     }
 
     return {
-      data: payload,
+      data,
       raw,
       receivedAt: new Date(),
     };
@@ -197,10 +224,52 @@ export async function fetchCurrentWeather(city, { signal } = {}) {
       throw error;
     }
 
-    if (typeof navigator !== "undefined" && navigator.onLine === false) {
-      throw new WeatherError("NETWORK", { cause: error });
+    throw new WeatherError("NETWORK", { cause: error });
+  } finally {
+    clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", abortFromCaller);
+  }
+}
+
+/** Autocomplete suggestions, already filtered to the selected country. */
+export async function fetchCitySuggestions({ query, country, signal }) {
+  if (offline()) return [];
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, SUGGEST_TIMEOUT_MS);
+
+  const abortFromCaller = () => controller.abort();
+  signal?.addEventListener("abort", abortFromCaller, { once: true });
+
+  try {
+    const url = new URL(`${API_BASE}/search`, window.location.origin);
+    url.searchParams.set("q", query);
+    url.searchParams.set("country", country);
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
+    });
+
+    if (!response.ok) {
+      throw new WeatherError("GENERIC");
     }
 
+    const payload = await response.json();
+    return Array.isArray(payload?.suggestions) ? payload.suggestions : [];
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      if (timedOut) throw new WeatherError("TIMEOUT");
+      throw error;
+    }
+    if (error instanceof WeatherError) throw error;
     throw new WeatherError("NETWORK", { cause: error });
   } finally {
     clearTimeout(timeoutId);

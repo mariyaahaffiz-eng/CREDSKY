@@ -1,14 +1,24 @@
 import assert from "node:assert/strict";
 import { classifyApiFailure } from "../js/api.js";
 import {
+  countryMatches,
+  filterCountries,
+  findCountry,
+  getCountryByCode,
+} from "../js/countries.js";
+import {
   derivePersonality,
   deriveSkyTheme,
+  findPopularCity,
+  formatFullLocation,
   formatRegion,
   getHumidityNote,
+  getPopularCityLabel,
   getUvLevel,
   getWeatherIconUrl,
   getWindNote,
   normalizeCityName,
+  POPULAR_CITIES,
 } from "../js/weather.js";
 
 let passed = 0;
@@ -146,15 +156,77 @@ test("WeatherAPI icon is upgraded to 128px over HTTPS", () => {
   );
 });
 
-test("region avoids repeating the city name", () => {
+test("region line shows region and country, even when region repeats the city", () => {
   assert.equal(
     formatRegion({ name: "Delhi", region: "Delhi", country: "India" }),
-    "India",
+    "Delhi, India",
   );
   assert.equal(
     formatRegion({ name: "Mumbai", region: "Maharashtra", country: "India" }),
     "Maharashtra, India",
   );
+});
+
+test("full location never repeats identical parts", () => {
+  assert.equal(
+    formatFullLocation({ name: "Delhi", region: "Delhi", country: "India" }),
+    "Delhi, India",
+  );
+  assert.equal(
+    formatFullLocation({
+      name: "Delhi",
+      region: "Ontario",
+      country: "Canada",
+    }),
+    "Delhi, Ontario, Canada",
+  );
+  assert.equal(
+    formatFullLocation({ name: "Singapore", region: "Singapore", country: "Singapore" }),
+    "Singapore",
+  );
+});
+
+test("country lookup accepts ISO codes, names and aliases", () => {
+  assert.equal(findCountry("IN")?.name, "India");
+  assert.equal(findCountry("india")?.code, "IN");
+  assert.equal(findCountry("United States of America")?.code, "US");
+  assert.equal(findCountry("USA")?.code, "US");
+  assert.equal(findCountry("UK")?.code, "GB");
+  assert.equal(findCountry("Czechia")?.code, "CZ");
+  assert.equal(findCountry("Atlantis"), null);
+  assert.equal(getCountryByCode("in")?.name, "India");
+});
+
+test("country matching normalises WeatherAPI names", () => {
+  const india = getCountryByCode("IN");
+  const usa = getCountryByCode("US");
+  const uk = getCountryByCode("GB");
+
+  assert.equal(countryMatches(india, "India"), true);
+  assert.equal(countryMatches(usa, "United States of America"), true);
+  assert.equal(countryMatches(usa, "USA"), true);
+  assert.equal(countryMatches(uk, "United Kingdom"), true);
+  assert.equal(countryMatches(india, "Canada"), false);
+  assert.equal(countryMatches(usa, "Canada"), false);
+  assert.equal(countryMatches(india, ""), false);
+});
+
+test("country filter ranks exact and prefix matches first", () => {
+  assert.equal(filterCountries("ind")[0].code, "IN");
+  assert.equal(filterCountries("united states")[0].code, "US");
+  assert.equal(filterCountries("uk")[0].code, "GB");
+  assert.equal(filterCountries("zzzz").length, 0);
+});
+
+test("popular cities carry a country and search with it", () => {
+  const delhi = POPULAR_CITIES.find((entry) => entry.city === "Delhi");
+  assert.equal(delhi.code, "IN");
+  assert.equal(getPopularCityLabel(delhi), "Delhi, India");
+
+  const newYork = findPopularCity("New York", "US");
+  assert.equal(newYork.code, "US");
+  assert.equal(findPopularCity("New York", "IN"), null);
+  assert.equal(findPopularCity("Mumbai", "IN")?.city, "Mumbai");
 });
 
 test("city matching is case and whitespace insensitive", () => {

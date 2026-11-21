@@ -1,15 +1,27 @@
+import { findCountry } from "./countries.js";
+
 export const POPULAR_CITIES = Object.freeze([
-  "Mumbai",
-  "Delhi",
-  "Bengaluru",
-  "Hyderabad",
-  "Chennai",
-  "Kolkata",
-  "Pune",
-  "Ahmedabad",
-  "New York",
-  "London",
+  { city: "Mumbai", code: "IN" },
+  { city: "Delhi", code: "IN" },
+  { city: "Bengaluru", code: "IN" },
+  { city: "Hyderabad", code: "IN" },
+  { city: "Chennai", code: "IN" },
+  { city: "Kolkata", code: "IN" },
+  { city: "Pune", code: "IN" },
+  { city: "Ahmedabad", code: "IN" },
+  { city: "New York", code: "US" },
+  { city: "London", code: "GB" },
 ]);
+
+const SHORT_COUNTRY_LABELS = Object.freeze({
+  IN: "India",
+  US: "USA",
+  GB: "UK",
+});
+
+export function getPopularCityLabel(entry) {
+  return `${entry.city}, ${SHORT_COUNTRY_LABELS[entry.code] || entry.code}`;
+}
 
 /**
  * The interpretation engine uses one, explicit priority order so overlapping
@@ -226,13 +238,28 @@ export function formatClockForZone(timeZone, date = new Date()) {
 }
 
 export function formatRegion(location) {
-  const city = String(location?.name || "").trim();
   const region = String(location?.region || "").trim();
   const country = String(location?.country || "").trim();
   const parts = [];
 
+  // Keep the region even when it repeats the city name (e.g. Delhi, Delhi):
+  // the heading already supplies the city, so the line still shows all three.
   for (const part of [region, country]) {
-    if (part && part.toLowerCase() !== city.toLowerCase() && !parts.includes(part)) {
+    if (part && !parts.some((existing) => existing.toLowerCase() === part.toLowerCase())) {
+      parts.push(part);
+    }
+  }
+
+  return parts.join(", ");
+}
+
+/** "Delhi, Ontario, Canada" — used for labels, titles and announcements. */
+export function formatFullLocation(location) {
+  const parts = [];
+
+  for (const raw of [location?.name, location?.region, location?.country]) {
+    const part = String(raw || "").trim();
+    if (part && !parts.some((existing) => existing.toLowerCase() === part.toLowerCase())) {
       parts.push(part);
     }
   }
@@ -253,9 +280,17 @@ export function normalizeCityName(value) {
     .toLocaleLowerCase("en");
 }
 
-export function findPopularCity(cityName) {
+export function findPopularCity(cityName, countryValue) {
   const key = normalizeCityName(cityName);
-  return POPULAR_CITIES.find((city) => normalizeCityName(city) === key) || null;
+  const country = countryValue ? findCountry(countryValue) : null;
+
+  return (
+    POPULAR_CITIES.find(
+      (entry) =>
+        normalizeCityName(entry.city) === key &&
+        (!country || entry.code === country.code),
+    ) || null
+  );
 }
 
 export function formatBytes(bytes) {
